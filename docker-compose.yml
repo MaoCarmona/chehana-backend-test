@@ -1,0 +1,96 @@
+version: '3.8'
+
+services:
+  # Base de datos PostgreSQL
+  postgres:
+    image: postgres:15-alpine
+    container_name: chehana_postgres
+    environment:
+      POSTGRES_USER: chehana_user
+      POSTGRES_PASSWORD: chehana_password
+      POSTGRES_DB: chehana_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+    ports:
+      - "5432:5432"
+    networks:
+      - chehana_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chehana_user -d chehana_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Aplicación FastAPI
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: chehana_app
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://chehana_user:chehana_password@postgres:5432/chehana_db
+      - SECRET_KEY=your-super-secret-jwt-key-change-in-production
+      - ALGORITHM=HS256
+      - ACCESS_TOKEN_EXPIRE_MINUTES=30
+      - DEBUG=True
+      - ENVIRONMENT=docker
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - chehana_network
+    volumes:
+      - ./:/app
+    command: >
+      sh -c "
+        echo 'Esperando a que PostgreSQL esté listo...' &&
+        sleep 10 &&
+        echo 'Ejecutando migraciones...' &&
+        python -m alembic upgrade head &&
+        echo 'Iniciando aplicación...' &&
+        uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+      "
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Servidor de email para testing (opcional)
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: chehana_mailhog
+    ports:
+      - "1025:1025"  # SMTP
+      - "8025:8025"  # Web UI
+    networks:
+      - chehana_network
+
+  # PgAdmin para administración de BD (opcional)
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: chehana_pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@chehana.com
+      PGADMIN_DEFAULT_PASSWORD: admin123
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    ports:
+      - "5050:80"
+    depends_on:
+      - postgres
+    networks:
+      - chehana_network
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+
+volumes:
+  postgres_data:
+  pgadmin_data:
+
+networks:
+  chehana_network:
+    driver: bridge 
